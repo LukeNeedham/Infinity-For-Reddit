@@ -1,0 +1,154 @@
+name: Build APK on PR
+
+# Copied from LukeNeedham/ci-workflows (.github/workflows/android_pr_build.yml) and made standalone: the
+# workflow_call inputs are fixed to this app's values and the README screenshot steps are dropped. This repo
+# does not consume the common workflows; the only remote reference is the ci-scripts action, which provides
+# the pr_releases.py script used below. Builds a debug APK, publishes it as a pre-release asset and posts/updates
+# a sticky PR comment with the download link.
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # A newer push to the same PR cancels the running build, so an older build cannot finish last
+    # and overwrite the newer build's comment.
+    concurrency:
+      group: android-pr-build-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: LukeNeedham/ci-workflows/.github/actions/ci-scripts@main
+
+      # The AppHub link depends only on the repo name and the PR number, so it is posted as soon as the job
+      # starts and never changes. only_create leaves an existing comment alone: one comment per PR, however
+      # many pushes and re-runs. Skipped on manual dispatches (no PR to comment on).
+      - name: Post AppHub link on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: apphub-pr-link
+          only_create: true
+          message: |
+            ### 📲 AppHub
+
+            [Open this pull request in AppHub](https://www.lukeneedham.com/apphub/pr/${{ github.event.repository.name }}/${{ github.event.pull_request.number }})
+
+      # Runs first so the PR shows a new build is coming as soon as the job starts. The previous
+      # APK link is kept but flagged as stale. Skipped on manual dispatches (no PR to comment on).
+      - name: Mark previous build as stale
+        id: prev
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEADER: infinity-app-link
+          TZ_NAME: Europe/Amsterdam
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >
+          python3 "$CI_SCRIPTS/pr_releases.py" stale
+          --repo "$REPO" --pr "$PR_NUMBER" --header "$HEADER" --timezone "$TZ_NAME" --sha "$HEAD_SHA"
+
+      - name: Post build in progress on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: infinity-app-link
+          message: |
+            ### ⏳ Build in progress
+
+            - **Commit:** [`${{ steps.prev.outputs.short-sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha }})
+            - **Started:** ${{ steps.prev.outputs.time }}
+            - **Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ${{ steps.prev.outputs.old-url != '' && format('- **Previous APK:** [download]({0}) ⚠️ stale, does not include this commit', steps.prev.outputs.old-url) || '' }}
+
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      # Caches build outputs as well as downloaded dependencies. PR builds only read the cache, so
+      # PR branches do not fill it; runs on the default branch (such as a manual run there) write it.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' && github.base_ref == github.event.repository.default_branch }}
+
+      - name: Build APK
+        shell: bash
+        run: ./gradlew assembleDebug --no-daemon --build-cache
+
+      - name: Compute build metadata
+        id: meta
+        shell: bash
+        env:
+          TZ_NAME: Europe/Amsterdam
+          APK_PATH: app/build/outputs/apk/debug/app-debug.apk
+          RAW_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: >
+          python3 "$CI_SCRIPTS/pr_releases.py" meta
+          --timezone "$TZ_NAME" --apk-path "$APK_PATH" --branch "$RAW_BRANCH"
+          --run-number "${{ github.run_number }}" --run-attempt "${{ github.run_attempt }}"
+
+      - name: Create release and upload APK
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: app/build/outputs/apk/debug/app-debug.apk
+          tag: ${{ steps.meta.outputs.tag }}
+          name: "PR Build: ${{ github.head_ref || github.ref_name }}"
+          body: "Debug build generated automatically from branch: ${{ github.head_ref || github.ref_name }} at ${{ steps.meta.outputs.time }}"
+          prerelease: true
+          draft: false
+
+      # Skipped on manual dispatches, which have no PR to comment on
+      - name: Post APK link on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: infinity-app-link
+          message: |
+            ### ✅ Build succeeded
+
+            - **APK:** 📦 [Download](https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/${{ steps.meta.outputs.apk-name }})
+            - **Commit:** [`${{ steps.prev.outputs.short-sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha }})
+            - **Built:** ${{ steps.meta.outputs.time }}
+            - **Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+      # Don't leave the comment claiming a build is in progress if the job dies
+      # A run cancelled by a newer push must stay quiet: the newer run owns the comment now.
+      # Only a run cancelled by hand (head commit unchanged) reports "cancelled".
+      - name: Check whether a newer push superseded this run
+        id: superseded
+        if: github.event_name == 'pull_request' && cancelled()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 "$CI_SCRIPTS/pr_releases.py" superseded --repo "$REPO" --pr "$PR_NUMBER" --sha "$RUN_SHA"
+
+      - name: Post build failed on PR
+        if: github.event_name == 'pull_request' && (failure() || (cancelled() && steps.superseded.outputs.superseded != 'true'))
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: infinity-app-link
+          message: |
+            ### ${{ job.status == 'cancelled' && '🚫 Build cancelled' || '❌ Build failed' }}
+
+            - **Commit:** [`${{ steps.prev.outputs.short-sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha }})
+            - **Started:** ${{ steps.prev.outputs.time }}
+            - **Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ${{ steps.prev.outputs.old-url != '' && format('- **Previous APK:** [download]({0}) ⚠️ stale, does not include this commit', steps.prev.outputs.old-url) || '' }}
+
