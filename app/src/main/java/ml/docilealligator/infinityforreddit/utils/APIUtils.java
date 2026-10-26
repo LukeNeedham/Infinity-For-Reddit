@@ -32,7 +32,8 @@ public class APIUtils {
 
     public static final String CLIENT_ID_KEY = "client_id";
     public static final String CLIENT_SECRET_KEY = "client_secret";
-    public static final String CLIENT_ID = "";
+    public static final String DEFAULT_CLIENT_ID = "";
+    private static volatile String clientId = DEFAULT_CLIENT_ID;
     public static final String IMGUR_CLIENT_ID = "Client-ID cc671794e0ab397";
     public static final String REDGIFS_CLIENT_ID = "1828d0bcc93-15ac-bde6-0005-d2ecbe8daab3";
     public static final String REDGIFS_CLIENT_SECRET = "TJBlw7jRXW65NAGgFBtgZHu97WlzRXHYybK81sZ9dLM=";
@@ -130,9 +131,21 @@ public class APIUtils {
 
     public static final String PLATFORM_KEY = "platform";
 
+    public static String getClientId() {
+        return clientId;
+    }
+
+    /**
+     * Overrides the built-in Reddit client ID. A null or blank value restores the default.
+     */
+    public static void setClientId(@Nullable String customClientId) {
+        clientId = customClientId == null || customClientId.trim().isEmpty()
+                ? DEFAULT_CLIENT_ID : customClientId.trim();
+    }
+
     public static Map<String, String> getHttpBasicAuthHeader() {
         Map<String, String> params = new HashMap<>();
-        String credentials = String.format("%s:%s", APIUtils.CLIENT_ID, "");
+        String credentials = String.format("%s:%s", getClientId(), "");
         String auth = "Basic " + Base64.encodeToString(credentials.getBytes(), Base64.NO_WRAP);
         params.put(APIUtils.AUTHORIZATION_KEY, auth);
         return params;

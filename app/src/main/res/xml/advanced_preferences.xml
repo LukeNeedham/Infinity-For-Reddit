@@ -40,6 +40,11 @@
         app:title="@string/settings_reset_all_settings_title" />
 
     <ml.docilealligator.infinityforreddit.customviews.preference.CustomFontPreference
+        app:key="custom_client_id"
+        app:title="@string/settings_custom_client_id_title"
+        app:summary="@string/settings_custom_client_id_summary" />
+
+    <ml.docilealligator.infinityforreddit.customviews.preference.CustomFontPreference
         app:key="backup_settings"
         app:title="@string/settings_backup_settings_title"
         app:summary="@string/settings_backup_settings_summary" />

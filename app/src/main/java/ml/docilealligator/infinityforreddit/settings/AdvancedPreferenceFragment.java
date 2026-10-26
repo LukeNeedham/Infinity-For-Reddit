@@ -9,6 +9,8 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
+import android.widget.EditText;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
@@ -39,6 +41,7 @@ import ml.docilealligator.infinityforreddit.customviews.preference.CustomFontPre
 import ml.docilealligator.infinityforreddit.events.RecreateActivityEvent;
 import ml.docilealligator.infinityforreddit.readpost.ReadPostDao;
 import ml.docilealligator.infinityforreddit.readpost.ReadPostType;
+import ml.docilealligator.infinityforreddit.utils.APIUtils;
 import ml.docilealligator.infinityforreddit.utils.SharedPreferencesUtils;
 
 /**
@@ -87,6 +90,9 @@ public class AdvancedPreferenceFragment extends CustomFontPreferenceFragmentComp
     @Named("post_history")
     SharedPreferences postHistorySharedPreferences;
     @Inject
+    @Named("internal")
+    SharedPreferences mInternalSharedPreferences;
+    @Inject
     Executor executor;
     private Handler handler;
 
@@ -105,6 +111,7 @@ public class AdvancedPreferenceFragment extends CustomFontPreferenceFragmentComp
         Preference deleteReadPostsPreference = findPreference(SharedPreferencesUtils.DELETE_READ_POSTS_IN_DATABASE);
         Preference deleteAllLegacySettingsPreference = findPreference(SharedPreferencesUtils.DELETE_ALL_LEGACY_SETTINGS);
         Preference resetAllSettingsPreference = findPreference(SharedPreferencesUtils.RESET_ALL_SETTINGS);
+        Preference customClientIdPreference = findPreference(SharedPreferencesUtils.CUSTOM_CLIENT_ID);
         Preference backupSettingsPreference = findPreference(SharedPreferencesUtils.BACKUP_SETTINGS);
         Preference restoreSettingsPreference = findPreference(SharedPreferencesUtils.RESTORE_SETTINGS);
 
@@ -294,6 +301,30 @@ public class AdvancedPreferenceFragment extends CustomFontPreferenceFragmentComp
                             EventBus.getDefault().post(new RecreateActivityEvent());
                         })
                         .setNegativeButton(R.string.no, null)
+                        .show();
+                return true;
+            });
+        }
+
+        if (customClientIdPreference != null) {
+            customClientIdPreference.setOnPreferenceClickListener(preference -> {
+                EditText editText = new EditText(mActivity);
+                editText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+                editText.setHint(R.string.settings_custom_client_id_hint);
+                editText.setText(mInternalSharedPreferences.getString(SharedPreferencesUtils.CUSTOM_CLIENT_ID, ""));
+                int padding = (int) (24 * getResources().getDisplayMetrics().density);
+                editText.setPadding(padding, padding / 2, padding, padding / 2);
+                new MaterialAlertDialogBuilder(mActivity, R.style.MaterialAlertDialogTheme)
+                        .setTitle(R.string.settings_custom_client_id_title)
+                        .setView(editText)
+                        .setPositiveButton(R.string.ok, (dialogInterface, i) -> {
+                            String clientId = editText.getText().toString().trim();
+                            mInternalSharedPreferences.edit()
+                                    .putString(SharedPreferencesUtils.CUSTOM_CLIENT_ID, clientId).apply();
+                            APIUtils.setClientId(clientId);
+                            Toast.makeText(mActivity, R.string.settings_custom_client_id_saved, Toast.LENGTH_SHORT).show();
+                        })
+                        .setNegativeButton(R.string.cancel, null)
                         .show();
                 return true;
             });
